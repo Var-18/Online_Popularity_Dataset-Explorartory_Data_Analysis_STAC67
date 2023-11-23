@@ -1,0 +1,254 @@
+---
+title: "STAC67_Project_After_Model"
+author: "Boxuan Fang"
+date: "2023-11-23"
+output: html_document
+---
+
+WE HAVE ALREADY FIND OUR MODEL PREVIOUSLY
+
+Here we want to do model diagnostics
+
+```{r}
+library(MASS)
+library(ggpubr)
+library(olsrr)
+library(tidyverse)
+
+```
+
+
+# Read in the training data set
+```{r}
+new.data.cv.in = read_csv("data.training.csv")
+new.data.cv.in
+```
+
+#get our final model
+```{r}
+final_model = lm(formula = shares ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length, 
+    data = new.data.cv.in)
+summary(final_model)
+```
+
+
+
+
+# check the plots for our final fit
+```{r}
+#par(mfrow = c(2,2))
+plot(final_model)
+```
+
+1. linearity seems fine, 2. normality seems violated, 3. constant variance seems violated as well, 4. seems like there's influential points and 3 definite outliers as R labels them in this plot.
+
+# Try using Box-Cox transformation for noramlity
+```{r}
+boxcox(final_model)
+```
+
+lambda is near 0 so we take natrual log transformation for our response variable Y
+
+# log transformation
+```{r}
+model_transformed = lm(formula = I(log(shares)) ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length, 
+    data = new.data.cv.in)
+summary(model_transformed)
+```
+
+# see whether the assumption becomes better using the plots
+```{r}
+plot(model_transformed)
+```
+
+1. linearity still good, 2. normality becomes a lot better, 3. constant variance becomes better (but still need to check), 4. the 3664th observation seems to be the influential point.
+
+# test for constant/equal variance assumption
+```{r}
+library(lmtest)
+```
+
+```{r}
+bptest(model_transformed,studentize = "F")
+```
+The test for constant/equal variance assumption is very sensitive to large sample size, so even the test result shows that equal variance assumption is violated, it is not trust worthy.
+
+For normality, since we have a huge sample size, Central Limit Theorem helps. so we can say that normality assumption holds for this case.
+
+#lets see a better cook's distance plot
+```{r}
+ols_plot_cooksd_chart(model_transformed)
+
+```
+
+observation No. 3664 seems to be the highest influential point. so let's try to get rid of that and see what's gonna happen to our model along with other assumptions.
+
+#We try to get rid of that influential point
+```{r}
+new.data.cv.in2 = new.data.cv.in[-3664, ]
+```
+
+
+
+
+```{r}
+model_transformed_drop1 = lm(formula = I(log(shares)) ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length, 
+    data = new.data.cv.in2)
+summary(model_transformed_drop1)
+```
+
+# see the plots
+```{r}
+plot(model_transformed_drop1)
+```
+# Trying to simplify our transformed model and applying the principle of parsimony
+
+```{r}
+# Setting up our function to compare values 
+
+library(MPV)
+# FUNCTION TO GET SUMMARY STATS(AIC,BIC,PRESS,MALLUS CP)
+
+
+##calculate the craziest model's MSE AS THAT IS OUR FULL MODEL OR BASELINE FOR REDUCTION
+calculate_model_metrics <- function(main_model,model) {
+  
+  # AIC and BIC
+  aic_value <- AIC(main_model)-AIC(model)
+  bic_value <- BIC(main_model)-BIC(model)
+
+  # PRESS
+ press=PRESS(main_model)-PRESS(model)
+
+  
+  
+  # R^2 and Adjusted R^2
+  r_squared <- summary(main_model)$r.squared-summary(model)$r.squared
+  adj_r_squared <- summary(main_model)$adj.r.squared-summary(model)$adj.r.squared
+ 
+
+  return(list(DEL_AIC = -aic_value, DEL_BIC = -bic_value, DEL_PRESS = -press, DEL_R_squared = -r_squared, DEL_Adj_R_squared = -adj_r_squared))
+}
+
+
+# FUNCTION FOR MALLOW'S CP
+
+Mallows_CP <- function(baseline,model)
+{
+  
+  MSEf = sum(residuals(baseline)^2)/baseline$df.residual
+  sigma_squared <-  MSEf
+  p <- length(coef(model))
+  cp <-( (sum(residuals(model)^2) )/ sigma_squared ) +  2 * p - (nrow(new.data.cv.in) )
+
+  return(cp)
+}
+```
+
+# BACKWARD ELIMINATION on LN MODEL
+
+```{r}
+
+calculate_model_metrics (model_transformed,model_transformed_drop1)
+cat("Mallows_C_p",Mallows_CP(model_transformed,model_transformed_drop1))
+```
+
+This is the best model for us as of now.
+
+# Reading Validation Data Set
+
+```{r}
+new.data.cv.out = read.csv("data.val.csv")
+#new.data.cv.out
+```
+# Model Validation
+
+```{r}
+new.data.cv.out %>% select(c(shares,data_channel, self_reference_avg_sharess, kw_avg_avg, num_hrefs, avg_negative_polarity, is_weekend, average_token_length, global_subjectivity)) -> new.data.cv.out
+
+```
+
+
+```{r}
+#new.data.cv.out
+cv_values <- predict(model_transformed_drop1,new.data.cv.out[,2:9])
+
+nstar <- dim(new.data.cv.out)[1]
+MSPE <- sum((log(new.data.cv.out$shares) - cv_values)^2) / nstar
+MSPE
+```
+
+
+# K FOLD CROSS VALIDATION ON THE ENTIRE DATASET
+
+```{r}
+data <- read_csv("new_data.csv")
+```
+
+```{r}
+library(caret)
+
+# Assuming 'data' is your dataframe and it's already been loaded into the R environment.
+# If not, you would load it using read.csv() or another appropriate function.
+
+# Set up cross-validation with k folds
+set.seed(123)  # Setting a seed for reproducibility
+folds <- createFolds(data$shares, k = 1000, list = TRUE, returnTrain = FALSE)
+
+# Function to perform lm on each fold and calculate RMSE
+cv_results <- lapply(seq_along(folds), function(i) {
+  # The indices of the training set
+  train_indices <- unlist(folds[-i])
+  # The indices of the test set
+  test_indices <- folds[[i]]
+  
+  # Create the training and test sets
+  train_set <- data[train_indices, ]
+  test_set <- data[test_indices, ]
+  
+  # Fit the linear model on the training set
+  lm_model <- lm(formula = I(log(shares)) ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length, data=train_set)
+  
+  # Predict on the test set
+  predictions <- predict(lm_model, newdata = test_set)
+  
+  # Calculate RMSE for the test set
+  rmse <- sqrt(mean((log(test_set$shares) - predictions)^2))
+  
+  # Return the RMSE
+  return(rmse)
+})
+
+# Calculate the average RMSE across all folds
+average_rmse <- mean(unlist(cv_results))
+
+# Print the average RMSE
+print(average_rmse)
+
+```
+
+
