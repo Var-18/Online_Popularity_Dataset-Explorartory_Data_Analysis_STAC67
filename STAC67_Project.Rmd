@@ -1,0 +1,518 @@
+---
+title: "Project STAC67"
+output: html_notebook
+---
+# Our Goal is to predict Shares using a 'good enough' model.
+
+# Procedure:
+Step 1: EDA(DV,Plots, slicing, etc), Cleaning Data, and Checking for Co Linearity
+Step 2: Step-wise Selection(Lec 20) Prof said it is better
+Step 3: Model from Step 2 use all possible subset regressions(Slide 23)
+Step 4: Use Model from Step 2(Main Effect Model) and use the colinearity results as a guide for making an interaction model.
+Step 5: : Model from Step 4 use all possible subset regression or another method or tests  to remove or keep interactions to get an Improved Interaction Model.
+Step 6: Diagnostics on Interaction or Regular which ever is better? Use WLS, Box-cox or whatever if any assumption is violated. Gauss Markov Theorem Assumptions (LNIE)
+Step 7: Final Model using whichever transformation was good,(try and use some transformation from out of the course syllabus as well ask in OH)
+Step 8: Repeat Model Diagnostics, Lec 20 onwards, make any changes if necessary(Transform again?)
+Step 9: Validation
+
+
+# Data Prepeartion
+```{r}
+library(tidyverse)
+library(reshape2)
+library(plotly)
+library(gridExtra)
+```
+
+```{r}
+data <- read.csv("OnlineNewsPopularity.csv")
+# Load the dataset
+
+
+# Checking for missing values
+missing_values <- sapply(data, function(x) sum(is.na(x)))
+
+# Checking for duplicate rows
+duplicate_rows <- sum(duplicated(data))
+
+# Checking for columns with a single unique value
+single_unique_value_columns <- sapply(data, function(x) length(unique(x)) == 1)
+
+# Checking data types
+data_types <- sapply(data, class)
+
+# Display the results
+print("Missing Values:")
+print(missing_values)
+print("Number of Duplicate Rows:")
+print(duplicate_rows)
+print("Columns with Single Unique Value:")
+print(names(data)[single_unique_value_columns])
+print("Data Types:")
+print(data_types)
+```
+This means we have a clean data set for the very basics.
+
+# lets see the data
+
+```{r}
+data
+```
+
+After seeing the data, the first column Url is kind of like an id for the whole dataset so we keep that, timedelta is non-predictive so we drop that, n_non_stop_words is all 1 so we drop that, for data channel we can combine those into one column that specify what channel it is using pivot_longer(), also for weekday or weekend we can just use whether it is weekend or not so drop all weekday_is columns.
+
+```{r}
+data %>% select(-c(timedelta, n_non_stop_words, weekday_is_monday, weekday_is_tuesday, weekday_is_wednesday, weekday_is_thursday, weekday_is_friday, weekday_is_saturday, weekday_is_sunday)) -> data
+
+long_data <- pivot_longer(data, cols = 12:17, names_to = "data_channel", values_to = "channel_value")
+
+# Replace channel names with "not specified" where all channel values are 0
+
+long_data <- long_data %>%
+  group_by(url) %>% 
+  mutate(all_zero = all(channel_value == 0)) %>%
+  ungroup()
+
+long_data <- long_data %>%
+  mutate(data_channel = ifelse(all_zero, "not specified", data_channel))
+
+long_data <- long_data %>%
+  select(-all_zero) %>%
+  filter(channel_value == 1 | data_channel == "not specified")
+
+long_data <- long_data %>%
+  distinct(url, .keep_all = TRUE)
+
+long_data %>% select(-c(channel_value)) -> long_data
+new_data = long_data
+
+#factor the categorical variable
+new_data$is_weekend = factor(new_data$is_weekend)
+```
+
+# drop all the LDA variables
+
+```{r}
+new_data %>% select(-c(LDA_00, LDA_01, LDA_02, LDA_03, LDA_04)) -> new_data
+```
+
+# see the correlation between independent variables, drop high correlated ones using heatmap
+
+```{r}
+quantitative_data <- new_data[, sapply(new_data, is.numeric)]
+quantitative_data <- quantitative_data[, !colnames(quantitative_data) %in% c("shares")]
+cor_matrix <- cor(quantitative_data)
+long_cor_matrix <- melt(cor_matrix)
+g = ggplot(long_cor_matrix, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.text.y = element_text(angle = 45, hjust = 1)) +
+  labs(fill = "Correlation", x = "", y = "")
+p = ggplotly(g)
+p
+```
+
+
+We can see from the heat map that n_unique_tokens and n_non_stop_unique_tokens are very highly correlated, so we drop n_non_stop_unique_tokens. Also kw_max_min and kw_avg_min are very highly correlated, kw_max_max and kw_min_min are very highly negatively correlated, kw_avg_avg and kw_max_avg are very highly correlated, so for this kw columns, we will choose kw_avg_min, kw_avg_max, and kw_avg_avg for each worst, best, and average cases. It is always highly correlated between three self_reference_ variables so we use the average one instead. we also drop rate_positive_words and rate_negative words since it kinds of produce the same information as global ones (it also cause high correlation with other predictors according to the heatmap above). Moreover, we only consider avg_positive_polarity and avg_negative_polarity since average can represent well. Lastly, we use title_subjectivity and title_sentiment_polarity instead of absolute ones so that we can see whether it is negatively correlated or positively correlated with our response variable well. I think also num_hrefs and num_self_hrefs are kind of saying the same thing so we drop num_self_hrefs.
+
+
+
+# get a 'cleaner' data set
+
+```{r}
+new_data %>% select(-c(n_non_stop_unique_tokens, kw_min_min, kw_max_min, kw_min_max, kw_max_max, kw_min_avg, kw_max_avg, self_reference_min_shares, self_reference_max_shares, rate_positive_words, rate_negative_words, min_positive_polarity, max_positive_polarity, min_negative_polarity, max_negative_polarity, abs_title_subjectivity, abs_title_sentiment_polarity, num_self_hrefs)) -> new_data
+```
+
+
+#EDA
+## for quantitative variables:
+```{r}
+p1 = ggplot(new_data, aes(y = n_tokens_title)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "n_tokens_title")
+p2 = ggplot(new_data, aes(y = n_tokens_content)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "n_tokens_content")
+p3 = ggplot(new_data, aes(y = n_unique_tokens)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "n_unique_tokens")
+p4 = ggplot(new_data, aes(y = num_hrefs)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "num_hrefs")
+p5 = ggplot(new_data, aes(y = num_imgs)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "num_imgs")
+p6 = ggplot(new_data, aes(y = num_videos)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "num_videos")
+p7 = ggplot(new_data, aes(y = average_token_length)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "average_token_length")
+p8 = ggplot(new_data, aes(y = num_keywords)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "num_keywords")
+p9 = ggplot(new_data, aes(y = kw_avg_min)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "kw_avg_min")
+p10 = ggplot(new_data, aes(y = kw_avg_max)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "kw_avg_max")
+p11 = ggplot(new_data, aes(y = kw_avg_avg)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "kw_avg_avg")
+p12 = ggplot(new_data, aes(y = self_reference_avg_sharess)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "self_reference_avg_sharess")
+p13 = ggplot(new_data, aes(y = global_subjectivity)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "global_subjectivity")
+p14 = ggplot(new_data, aes(y = global_sentiment_polarity)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "global_sentiment_polarity")
+p15 = ggplot(new_data, aes(y = global_rate_positive_words)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "global_rate_positive_words")
+p16 = ggplot(new_data, aes(y = global_rate_negative_words)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "global_rate_negative_words")
+p17 = ggplot(new_data, aes(y = avg_positive_polarity)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "avg_positive_polarity")
+p18 = ggplot(new_data, aes(y = avg_negative_polarity)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "avg_negative_polarity")
+p19 = ggplot(new_data, aes(y = title_subjectivity)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "title_subjectivity")
+p20 = ggplot(new_data, aes(y = title_sentiment_polarity)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "title_sentiment_polarity")
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, p8, p9, p10, p11, p12, p13, p14, p15, p16, p17, p18, p19, p20, ncol = 4)
+```
+
+there is a clear outlier in p3, which is n_unique_tokens, what I will do here is to drop that observation.
+
+```{r}
+new_data = new_data %>% filter(n_unique_tokens < 1)
+p3.new = ggplot(new_data, aes(y = n_unique_tokens)) +
+  geom_boxplot() +
+  theme_minimal() +
+  labs(x = "", y = "n_unique_tokens")
+p3.new
+```
+it looks way better than before.
+
+## for categorical variables:
+```{r}
+category_counts <- new_data %>%
+  group_by(is_weekend) %>%
+  summarise(count = n())
+c1 = ggplot(category_counts, aes(x = is_weekend, y = count)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Counts of weekend or not", x = "is_weekend", y = "Count")
+category_counts2 <- new_data %>%
+  group_by(data_channel) %>%
+  summarise(count = n())
+c2 = ggplot(category_counts2, aes(x = data_channel, y = count)) +
+  geom_bar(stat = "identity") +
+  theme_minimal() +
+  labs(title = "Counts of which channel", x = "data_channel", y = "Count")
+grid.arrange(c1, c2, ncol = 2)
+```
+
+# create a csv file
+```{r}
+write.csv(new_data, "new_data.csv", row.names = FALSE)
+```
+
+
+# Data Split for Cross Validation
+
+We wanna split it 60/40
+There are 39643 observations in total, so we will use 60% of it (23786) for training, 40% of it (15857) for validation.
+
+```{r}
+set.seed(1006013984)
+new.data.cv.samp = sample(1:39643, 23786, replace = FALSE)
+new.data.cv.in = new_data[new.data.cv.samp,]
+new.data.cv.out = new_data[-new.data.cv.samp,]
+
+new.data.cv.in <- new.data.cv.in[,-1]
+```
+
+
+# first model 
+```{r}
+fit1 = lm(shares ~ ., data = new.data.cv.in)
+summary(fit1)
+```
+
+# stepwise selection
+```{r}
+library(MASS)
+```
+
+```{r}
+fit.simple = lm(shares ~ 1, data = new.data.cv.in)
+stepAIC(fit.simple, scope = list(upper = fit1, lower = fit.simple), direction = "both")
+```
+
+# backward elimination
+```{r}
+step(fit1, direction = "backward")
+```
+
+The two selection gives us different final models, but we choose the stepwise one since it has lower AIC and the model is 'shorter'.
+
+Therefore our model till this point is 
+
+shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + num_keywords + 
+    average_token_length + global_subjectivity + global_rate_positive_words
+    
+# till this point, the model looks like this (NOT FINAL YET FOR MAIN EFFECT)
+```{r}
+fit2 = lm(shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + num_keywords + 
+    average_token_length + global_subjectivity + global_rate_positive_words, data = new.data.cv.in)
+summary(fit2)
+```
+
+```{r}
+fit.reduce = lm(shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity, data = new.data.cv.in)
+summary(fit.reduce)
+```
+
+
+
+
+# F-test for testing whether we can drop those two variables
+```{r}
+anova(fit.reduce, fit2)
+```
+our null hypothesis here those two betas are zero, so we fail to reject the null hypothesis which means we can drop those two variables.
+
+
+#FINAL MAIN EFFECT(FOR NOW)
+
+```{r}
+summary(fit.reduce)
+```
+
+
+# EXPERIMENT 
+
+```{r}
+# fit with every single predictor
+fit.everything = lm(shares ~ (data_channel + self_reference_avg_sharess +
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity)^8,data=new.data.cv.in)
+stepAIC(fit.reduce, scope = list(upper = fit.everything, lower = fit.reduce), direction = "both")
+```
+# CRAZY INTERACTION MODEL IS WHAT WE GET FROM THE EXPERIMENT
+
+```{r}
+Crazy_model <- lm(formula = shares ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    average_token_length:global_subjectivity + data_channel:kw_avg_avg + 
+    is_weekend:global_subjectivity + self_reference_avg_sharess:kw_avg_avg + 
+    avg_negative_polarity:average_token_length + self_reference_avg_sharess:is_weekend + 
+    self_reference_avg_sharess:avg_negative_polarity:average_token_length, 
+    data = new.data.cv.in)
+
+#AIC(Crazy_model )
+#BIC(Crazy_model )
+
+# LOWER AIC AND BIC THAN MAIN EFFECT AND OTHER INTERACTION MODEL
+
+summary(Crazy_model)
+```
+
+this is our mian effect model
+
+# consider interaction terms
+```{r}
+#df = vcov(fit.reduce)
+```
+
+This suggest that avg_negative_polarity and global_subjectivity have a high covariance value of approximately 212,367.91
+
+so we consider put interaction between these two variables
+
+```{r}
+fit.interaction = lm(shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + global_subjectivity:avg_negative_polarity,
+    data = new.data.cv.in)
+summary(fit.interaction)
+```
+
+```{r}
+anova(fit.reduce, fit.interaction)
+```
+
+
+# Trying another interaction model
+
+data_channeldata_channel_is_entertainment has the highest covariance with avg_negative_polarity (approximately 25,144.64).
+data_channeldata_channel_is_lifestyle shows the highest covariance with global_subjectivity (approximately 37,021.96).
+data_channeldata_channel_is_socmed has the highest covariance with global_subjectivity (approximately 20,005.69).
+data_channeldata_channel_is_tech exhibits the highest covariance with global_subjectivity (approximately 30,981.30).
+data_channeldata_channel_is_world has the highest covariance with global_subjectivity (approximately 30,558.54).
+data_channelnot specified shows the highest covariance with global_subjectivity (approximately 44,491.91).
+
+
+
+```{r}
+model_with_interactions2 <- lm(shares ~ data_channel * global_subjectivity + data_channel * avg_negative_polarity + self_reference_avg_sharess + kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + average_token_length + global_subjectivity, data = new.data.cv.in)
+
+summary(model_with_interactions2)
+
+```
+
+```{r}
+anova(fit.reduce, model_with_interactions2)
+```
+We reject null at alpha =0.05. Lets see if we can individually 
+
+
+## Checking to see whether we can drop either one of the interactions using F test Reduced full model
+```{r}
+reduced_model_1 <- lm(shares ~ data_channel + data_channel * avg_negative_polarity + self_reference_avg_sharess + kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + average_token_length + global_subjectivity, data = new.data.cv.in)
+reduced_model_2 <- lm(shares ~ data_channel * global_subjectivity + self_reference_avg_sharess + kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + average_token_length + global_subjectivity, data = new.data.cv.in)
+
+
+```
+
+
+```{r}
+anova(fit.reduce, reduced_model_1)
+anova(fit.reduce, reduced_model_2)
+```
+# Interaction model found
+Here we can conclude that lm reduced_model_1 is the one we will be using as our interaction model. 
+
+
+```{r}
+fit.interaction <- reduced_model_1
+summary(fit.interaction)
+
+```
+
+# Comparing Main Effect vs Interaction Model
+
+```{r}
+library(MPV)
+```
+
+
+```{r}
+cat("MODEL 1: ",AIC(fit.reduce),
+BIC(fit.reduce),
+PRESS(fit.reduce))
+
+cat("\n MODEL 2: ",AIC(fit.interaction),
+BIC(fit.interaction),
+PRESS(fit.interaction))
+
+calculate_model_stats <- function(model, mse_full_model) {
+    # Number of observations
+    n <- length(model$residuals)
+    
+    # Number of predictors including the intercept
+    p <- length(model$coefficients)
+    
+    # R-squared and Adjusted R-squared
+    r_squared <- summary(model)$r.squared
+    adjusted_r_squared <- summary(model)$adj.r.squared
+    
+    # MSE - Mean Squared Error
+    mse <- mean(model$residuals^2)
+    
+    # AIC and BIC
+    aic_value <- AIC(model)
+    bic_value <- BIC(model)
+    
+    # PRESS
+    press <- sum((model$residuals / (1 - model$hat))^2)
+    
+    # Mallows' Cp
+    rss <- sum(model$residuals^2)  # Residual Sum of Squares
+    mallows_cp <- (rss / mse_full_model) - (n - 2 * p)
+    
+    # Return a list of statistics
+    return(list(
+        R_squared = r_squared,
+        Adjusted_R_squared = adjusted_r_squared,
+        MSE = mse,
+        AIC = aic_value,
+        BIC = bic_value,
+        PRESS = press,
+        Mallows_Cp = mallows_cp
+    ))
+}
+
+# Usage:
+# model <- lm(y ~ x, data = your_data)
+# stats <- calculate_model_stats(model, mse_full_model)
+# print(stats)
+```
+
+```{r}
+calculate_AIC <- function(fit) {
+  num_parameters <- length(coef(fit))
+log_likelihood <- logLik(fit)
+  AIC = 2 * num_parameters - 2 * log_likelihood
+  return(AIC)
+}
+
+aic_value1 <- calculate_AIC(fit.reduce)
+aic_value2 <- calculate_AIC(fit.interaction)
+
+
+calculate_BIC <- function(fit) {
+    num_parameters <- length(coef(fit))
+log_likelihood <- logLik(fit)
+n <- length(fit$residuals)
+  BIC = 2 * num_parameters*log(n) - 2 * log_likelihood
+  return(BIC)
+}
+
+bic_value1 <- calculate_BIC(fit.reduce)
+bic_value2 <- calculate_BIC(fit.interaction)
+
+
+AICBIC <- cbind(aic_value1,aic_value2,bic_value1,bic_value2)
+AICBIC
+
+
+
+```
+
