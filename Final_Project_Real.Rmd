@@ -1,0 +1,1104 @@
+---
+title: "Online News Popularity: Regression Analysis"
+author:
+  "Varun Datta ,Boxuan Fang,Yifan Xia & Emin Rza"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    keep_tex: yes
+  word_document: default
+header-includes:
+- \usepackage{geometry}
+- \geometry{left=1cm,right=1cm,top=2cm,bottom=2cm}
+html_document: default
+editor_options:
+  markdown:
+    wrap: 72
+---
+**Supervisor:** Dr. So-hee Kang
+
+```{r setup,echo=FALSE}
+# This code chunk sets up options for the entire document
+
+# Set scipen to a high value to avoid scientific notation
+options(scipen = 999)
+
+# You can also set other global options here if needed
+```
+
+# General Job Description
+
+Varun Datta (Project Leader): Generated the project structure, Finished model fitting, Organized the final report.
+Boxuan Fang (Project Analyst): Data cleaning, Model fitting, Model Diagnostics.
+Yifan Xia (Report Analyst): EDA, Work on presentation slides, Plotting.
+Emin Rza (Project Associate): EDA, Work on presentation slides, Model interpretation.
+
+# Introduction
+
+In the ever-evolving digital media landscape, Mashable serves as our case study to delve into the complex dynamics of article virality on social media, primarily measured by share counts. This study aims to unravel the multifaceted factors influencing Mashable articles' success, encompassing content features, multimedia elements, publication timing, and audience engagement. Beyond benefiting content creators and digital marketers with strategic insights, our findings contribute to a broader understanding of content virality in the social media era.
+
+### Data Set Introduction :
+Our dataset comprises an extensive array of metrics associated with Mashable articles, encompassing 61 variables that include content-specific features (word counts in titles and content, content uniqueness), multimedia elements (image and video counts), metadata characteristics (keyword counts, sentiment indices), and publication timing details (day of the week). Although the original article content is excluded due to copyright constraints, the dataset provides rich statistical data for predicting article share counts. This comprehensive dataset forms the basis for analyzing the multifaceted aspects potentially driving the virality of digital news content.
+
+
+### Research Question:
+
+"What key factors contribute to the virality of Mashable articles in
+social media, as measured by share count and how can we intepret this
+relationship in a quantifiable manner?
+
+### Hypothesis :
+We posit that Mashable article share counts are significantly influenced by a combination of content-related factors, including content length, uniqueness, multimedia elements, publication day, and the sentiment and subjectivity expressed in the article. Our study seeks to validate and quantify these influences, providing actionable insights for content optimization strategies.(Smith & Doe, 2020;
+Johnson et al., 2021).
+
+
+### Procedure
+
+**Step 1: Exploratory Data Analysis (EDA), Data Cleaning, and Checking**
+**for Collinearity**
+
+**Step 2: Stepwise Regression for Main effect Model**
+
+**Step 3: Development of an Interaction Model**
+
+**Step 5: Refinement of Interaction Model**
+
+**Step 6: Final Model Selection and Initial Model Diagnostics**
+
+**Step 7: Final Model Development using Remedial Methods(if needed)**
+
+**Step 8: Final Model Validation and Diagnostics**
+
+**Step 9: Conclusion and Final Assessment**
+
+We will be using the following libraries for our analysis
+(tidyverse),(reshape2),(plotly),(gridExtra),(MPV),(ggpubr),(olsrr),(lmtest),(webshot2),
+(knitr),(MASS),(broom),(caret),(olsrr)
+
+```{r,echo=FALSE,message=FALSE,results='hide'}
+# All the packages needed for the study
+library(tidyverse)
+library(reshape2)
+library(plotly)
+library(gridExtra)
+library(MPV)
+library(ggpubr)
+library(olsrr)
+library(lmtest)
+library(webshot2)
+library(knitr)
+library(MASS)
+library(broom)
+library(caret)
+library(olsrr)
+```
+
+```{r,echo=FALSE}
+data <- read.csv("OnlineNewsPopularity.csv")
+data_summary_two_lines <- function(data) { # Function for data validation
+  line1 <- paste(
+    if(all(sapply(data, function(x) sum(is.na(x))) == 0)) "No missing values,"
+    else "Missing values found,",
+    if(sum(duplicated(data)) == 0) "no duplicate rows," else "duplicate rows found.")
+line2 <- paste(
+    "Single Unique Value Columns:", sum(sapply(data, function(x) length(unique(x)) == 1)),
+    "| DataTypes:",
+    paste(names(table(sapply(data, class))), collapse = ", "))
+cat(line1, "\n", line2)
+}
+data_summary_two_lines(data)# Generating and displaying the summary
+```
+
+### Selecting Predictors from the data set and dataset checks
+
+We will be dropping the weekday specifier columns and the LDA values
+from the data set due to the nature of these variables and the advice
+from the prof.We will also be combining the channel type indicator
+variables into one categorical variable for the purpose of our analysis.
+
+```{r, echo=FALSE}
+
+# Selecting and removing specific columns
+data <- data %>% 
+  dplyr::select(-timedelta, -n_non_stop_words, -weekday_is_monday, -weekday_is_tuesday, 
+                -weekday_is_wednesday, -weekday_is_thursday, -weekday_is_friday, 
+                -weekday_is_saturday, -weekday_is_sunday)
+
+# Converting data to long format
+long_data <- pivot_longer(data, cols = 12:17, names_to = "data_channel", values_to = "channel_value")
+
+# Replace channel names with "not specified" where all channel values are 0
+long_data <- long_data %>%
+  group_by(url) %>% 
+  mutate(all_zero = all(channel_value == 0)) %>%
+  ungroup() %>%
+  mutate(data_channel = ifelse(all_zero, "not specified", data_channel)) %>%
+ dplyr::select(-all_zero) %>%
+  filter(channel_value == 1 | data_channel == "not specified") %>%
+  distinct(url, .keep_all = TRUE)
+
+# Removing 'channel_value' column
+long_data <- dplyr::select(long_data, -channel_value)
+
+# Creating a new dataset
+new_data <- long_data
+new_data$is_weekend <- factor(new_data$is_weekend)
+
+# Removing LDA columns
+new_data <- dplyr::select(new_data, -LDA_00, -LDA_01, -LDA_02, -LDA_03, -LDA_04)
+```
+
+### Correlation Plot-HeatMap
+
+```{r,echo=FALSE, fig.width=6, fig.height=4, dpi=200}
+
+
+# Selecting only numeric columns excluding 'shares'
+quantitative_data <- new_data %>%
+                    dplyr::select(where(is.numeric)) %>%
+                     dplyr::select(-shares)
+
+# Computing correlation matrix
+cor_matrix <- cor(quantitative_data)
+
+# Melting the correlation matrix for ggplot
+long_cor_matrix <- melt(cor_matrix)
+
+# Creating the ggplot
+g <- ggplot(long_cor_matrix, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+        axis.text.y = element_text(angle = 45, hjust = 1, size = 8)) +
+  labs(fill = "Correlation", x = "", y = "")
+
+# Display the plot
+g
+```
+
+**Let's remove highly correlated variables using the plot, most of these
+variables are max,min values of characteristics which also have an
+average value or similar metric**
+
+```{r,echo=FALSE, results='hide'}
+new_data %>% dplyr::select(-c(n_non_stop_unique_tokens, kw_min_min, kw_max_min, kw_min_max, kw_max_max, 
+                       kw_min_avg, kw_max_avg, self_reference_min_shares,
+                       self_reference_max_shares, rate_positive_words, rate_negative_words,
+                       min_positive_polarity, max_positive_polarity, min_negative_polarity,
+                       max_negative_polarity, abs_title_subjectivity,
+                       abs_title_sentiment_polarity, num_self_hrefs)) -> new_data
+```
+
+By strategically omitting certain variables, we can ensure a robust
+model that will be both practical and relevant to content creators and
+marketers seeking to maximize online engagement.
+
+## Description of Dataset
+
+### Distributions for each each of the variables we will be analysisng
+
+```{r, echo=FALSE,message=FALSE,warning=FALSE, fig.width=7, fig.height=7,out.width='\\textwidth'}
+# Function to create a boxplot for a given column
+create_boxplot <- function(column_name) {
+  ggplot(new_data, aes_string(y = column_name)) +
+    geom_boxplot() +
+    theme_minimal() +
+    theme(
+      axis.text.x = element_blank(), 
+      axis.ticks.x = element_blank(),
+      axis.text.y = element_text(size = 6),  # Set y-axis text to very small size
+      axis.title.y = element_text(size = 6)  # Set y-axis title to very small size
+    ) +
+    labs(x = "", y = column_name)
+}
+
+# List of columns to plot
+columns_to_plot <- c("n_tokens_title", "n_tokens_content", "n_unique_tokens", "num_hrefs", 
+                     "num_imgs", "num_videos", "average_token_length", "num_keywords", 
+                     "kw_avg_min", "kw_avg_max", "kw_avg_avg", "self_reference_avg_sharess", 
+                     "global_subjectivity", "global_sentiment_polarity", "global_rate_positive_words", 
+                     "global_rate_negative_words", "avg_positive_polarity", "avg_negative_polarity", 
+                     "title_subjectivity", "title_sentiment_polarity")
+# Create and arrange boxplots
+boxplots <- lapply(columns_to_plot, create_boxplot)
+do.call(grid.arrange, c(boxplots, ncol = 5))
+
+```
+
+**From the boxplot for n_unique_tokens we can see there is a clear
+outlier, let's rectify that by removing that point**
+
+```{r, echo=FALSE, fig.width=2, fig.height=2}
+
+
+# Filtering the data
+new_data <- new_data %>% filter(n_unique_tokens < 1)
+
+# Creating the boxplot with optimized size
+p3_new <- ggplot(new_data, aes(y = n_unique_tokens)) +
+  geom_boxplot() +
+  theme_minimal() +
+  theme(axis.text.x = element_text(size = 4),
+        axis.text.y = element_text(size = 4),
+        axis.title.y = element_text(size = 4)) +
+  labs(x = "", y = "n_unique_tokens")
+
+# Display the plot
+p3_new
+
+```
+
+Now we can clearly see the quartiles.
+
+### Plots of Shares vs Predictors from our refined dataset
+
+```{r, echo=FALSE, fig.width=7, fig.height=7}
+knitr::opts_chunk$set(fig.width=7, fig.height=7, out.width='\\textwidth')
+# Function to create scatter plot
+create_scatter_plot <- function(data, x_var, y_var="shares", x_lab="") {
+  ggplot(data, aes_string(x = x_var, y = y_var)) +
+    geom_point() +
+    theme_minimal() +
+    labs(x = x_lab, y = "Shares") +
+    theme(
+      axis.title = element_text(size = 6),  # Set axis title text to very small size
+      axis.text = element_text(size = 6)    # Set axis text to very small size
+    )
+}
+
+# List of variables for scatter plots
+variables <- c("n_tokens_title", "n_tokens_content", "n_unique_tokens", "num_hrefs", 
+               "num_imgs", "num_videos", "average_token_length", "num_keywords", 
+               "kw_avg_min", "kw_avg_max", "kw_avg_avg", "self_reference_avg_sharess", 
+               "global_subjectivity", "global_sentiment_polarity", "global_rate_positive_words", 
+               "global_rate_negative_words", "avg_positive_polarity", "avg_negative_polarity", 
+               "title_subjectivity", "title_sentiment_polarity")
+# Labels for x-axis of each plot
+labels <- c("n_tokens_title", "n_tokens_content", "n_unique_tokens", "num_hrefs", 
+            "Number of Images", "Number of Videos", "Average Token Length", "Number of Keywords", 
+            "Average Minimum Keyword", "Average Maximum Keyword", "Average Average Keyword", 
+            "Self-Reference Average Shares", "Global Subjectivity", "Global Sentiment Polarity", 
+            "Global Rate of Positive Words", "Global Rate of Negative Words", 
+            "Average Positive Polarity", "Average Negative Polarity", 
+            "Title Subjectivity", "Title Sentiment Polarity")
+
+# Create and store each plot in a list
+plots <- lapply(1:length(variables), function(i) {
+  create_scatter_plot(new_data, variables[i], x_lab=labels[i])
+})
+
+# Arrange all plots in a grid
+do.call(grid.arrange, c(plots, ncol = 2, nrow = 10))
+```
+
+From the scatter plots we can see non of our predictors have a linear relationship with our response indicating that the relationship between these predictors and content shareability is likely more complex than a simple linear model can capture. 
+
+# Building the Model
+
+```{r,echo=FALSE, results='hide'}
+set.seed(1006013984)
+new.data.cv.samp = sample(1:39643, 23786, replace = FALSE)
+new.data.cv.in = new_data[new.data.cv.samp,]
+new.data.cv.out = new_data[-new.data.cv.samp,]
+new.data.cv.in <- new.data.cv.in[,-1]
+new.data.cv.out = new.data.cv.out[,-1]
+```
+
+**We will be using 60% of our data set as our training set and the other
+40% as** **our training set,(view source code)** 
+
+## STEPWISE REGRESSION MODEL SELECTION FOR MAIN EFFECT MODEL
+
+We will use a null model as our lower bound and a model with every
+single predictor as our upper bound and a null model as our lower bound
+for a step wise AIC SELECTION with direction = both(view source code).
+
+```{r,echo=FALSE,message=FALSE}
+fit1 = lm(shares ~ ., data = new.data.cv.in)# Model with all the predictors 
+# used for the STEP AIC as the upperbound
+sf1 <- summary(fit1)
+cat("R^2_ADJ for all predictors in Linear Model: ",sf1$adj.r.squared)
+```
+
+We can definitely increase our R\^2 adjusted value and other metrics for
+this model by simply finding the optimal combination of predictors to
+use for a good main effect model.
+
+### STEP AIC FOR MODEL SELECTION
+
+```{r, echo=FALSE,results='hide'}
+fit.simple = lm(shares ~ 1, data = new.data.cv.in) # This our null model. 
+# We are gonna use the null model as our base for the step AIC. 
+results_stepAIC <- stepAIC(fit.simple, scope = list(upper = fit1, lower = fit.simple),
+                           direction = "both") 
+```
+
+The Step AIC selection resulted in the following model
+
+```{r,echo=FALSE}
+sum_AIC <- summary(results_stepAIC)
+estimates_and_pvalues <- sum_AIC$coefficients[, c("Estimate", "Pr(>|t|)")]
+kable(estimates_and_pvalues, caption = "Estimates and P-values from Linear Model", 
+      col.names = c("Estimate", "P-value"), 
+      align = 'c', format = "markdown")
+cat("Adjusted R^2 of this model: ",sum_AIC$adj.r.squared)
+```
+
+From the output we can see the $R^2_{Adjusted}$ value is similar to the
+full model, so by the principle of parsimony we will proceed with the
+STEP AIC fit as our model for now.
+
+If we examine the p-values for the t-tests for the significance of the
+coefficients and their impact on our response variable. We can clearly
+see from the t-tests that the coefficients of predictors num_keywords
+and global_rate_positive_words have a p-value 0.05 Let's do a full model
+reduced Model F-Test to see if we can drop them.
+
+```{r,echo=FALSE}
+sum_aic <- summary(results_stepAIC)
+coefficients_table <- sum_aic$coefficients
+
+# Convert to a dataframe if it's not already one
+coefficients_df <- as.data.frame(coefficients_table)
+
+# Filter for p-values greater than 0.05
+significant_coeffs <- coefficients_df[coefficients_df$"Pr(>|t|)" > 0.05, ]
+
+# Select only the Estimate and p-value columns
+final_df <- significant_coeffs[, c("Estimate", "Pr(>|t|)")]
+kable(final_df,caption="Step AIC model parameters coefficents with p-value >0.05 for t-test",format="markdown")
+
+fit.reduce = lm(shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity, data = new.data.cv.in)
+df_anova_1 <- anova(fit.reduce,results_stepAIC)
+kable(df_anova_1,caption="Anova Results for F Test for dropping num_keywords and global_rate_positive_words")
+cat("\n We can drop these two predictors at 0.05 significance level \n")
+estimates_and_pvalues2 <- summary(fit.reduce)$coefficients[, c("Estimate", "Pr(>|t|)")]
+#estimates_and_pvalues2 <- subset(estimates_and_pvalues2, `Pr(>|t|)` > 0.05) # To get only insignificant p-value predictors
+
+kable(estimates_and_pvalues2, caption = "Estimates and P-value for resulting linear model Linear Model", 
+      col.names = c("Estimate", "P-value"), 
+      align = 'c', format = "markdown")
+cat("Adjusted R^2 of this model: ",summary(fit.reduce)$adj.r.squared)
+```
+
+This current model is our main effect model
+
+## Interaction Model Selection
+
+Let's create a model using our final model and add all possible up to 3
+way interactions as our upper bound for a STEP AIC to select the
+interaction model
+
+```{r,echo=FALSE, results='hide'}
+fit.everything = lm(shares ~ (data_channel + self_reference_avg_sharess +
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity)^3,data=new.data.cv.in)# Every single 3-way interaction term
+results=stepAIC(fit.reduce, scope = list(upper = fit.everything, lower = fit.reduce), direction = "both")
+res_summary <- summary(results)
+```
+
+```{r,echo=FALSE}
+# Create a data frame for model_info with rounded values
+model_info <- data.frame(
+  Metric = c("R_Squared", "Adj_R_Squared", "AIC", "BIC", "F_Statistic", "P_Value","Sigma Hat"),
+  Value = c(
+    round(res_summary$r.squared, 3), 
+    round(res_summary$adj.r.squared, 3), 
+    round(AIC(results), 1), 
+    round(BIC(results), 1), 
+    paste(round(res_summary$fstatistic[1], 2), "(", res_summary$fstatistic[2], ", ", res_summary$fstatistic[3], ")", sep = ""),
+    round(pf(res_summary$fstatistic[1], res_summary$fstatistic[2], res_summary$fstatistic[3], lower.tail = FALSE), 3),
+    round(res_summary$sigma,3)
+  )
+)
+
+# Create a table for Model Summary using kable
+model_summary_table <- kable(model_info, 
+                            caption = "Model Summary Statistics (Rounded to 3 d.p.)", 
+                            col.names = c("Metric", "Value"), 
+                            align = c('l', 'r'))
+
+# Extract coefficients and p-values using broom's tidy function
+coefficients_df <- tidy(results)
+
+# Round the numeric columns to 3 decimal places
+coefficients_df$estimate <- round(coefficients_df$estimate, 3)
+coefficients_df$p.value <- round(coefficients_df$p.value, 3)
+
+# Keep only relevant columns
+coefficients_df <- coefficients_df[, c("term", "estimate", "p.value")]
+
+# Create a concise table using kable for Coefficients
+coefficients_table <- kable(coefficients_df, 
+                            caption = "Coefficients and P-values for Interaction Model from Step AIC (Rounded to 3 d.p.)", 
+                            col.names = c("Coefficient", "Estimate", "P-value"), 
+                            align = c('l', 'r', 'r'))
+
+# Print the tables
+coefficients_table
+model_summary_table
+
+
+```
+
+**Final Interaction Model** Our $R^2_{adjusted}$ value has gone up from
+0.018 to 0.044(rounded to 3 d.p.) which is a significant improvement.
+The result of the Global F-Test suggests that our model is significant
+with a p-value of 0 (rounded to 3 d.p.)
+
+Looking at the p-values here for the t-tests for significance of the
+coefficients we can clearly drop the following interaction term for
+average_token_length:global_subjectivity. **We will proceed to drop this
+term and use the resulting model as our final interaction model**
+
+**Note: We are not dropping any other terms as the t tests for at
+least** **one of the coefficients related to those categorical variables
+or their** **interaction terms is significant.**
+
+```{r,echo=FALSE}
+Final_Interaction_Model <- lm(shares ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + 
+    self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + 
+    data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + 
+    is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + 
+    avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + 
+    self_reference_avg_sharess:avg_negative_polarity:average_token_length,
+    data = new.data.cv.in)
+formula_final <- shares ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + avg_negative_polarity + is_weekend + 
+    average_token_length + global_subjectivity + 
+    self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + 
+    data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + 
+    is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + 
+    avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + 
+    self_reference_avg_sharess:avg_negative_polarity:average_token_length
+IM_ <-summary(Final_Interaction_Model)
+
+kable(data.frame(IM_$sigma,IM_$r.squared,IM_$adj.r.squared),caption="Summary of Final interaction Model")
+
+```
+
+Before we proceed forward we are writing a function to compare 2 models
+using Mallow's CP,PRESS,AIC,BIC and the two coefficient of determination
+values.(Function Hidden, view source code)
+
+```{r, echo=FALSE}
+# FUNCTION TO GET SUMMARY STATS(AIC,BIC,PRESS,MALLOWS CP)
+##calculate the model's MSE AS THAT IS OUR FULL MODEL OR BASELINE FOR REDUCTION
+calculate_model_metrics <- function(main_model,model) {
+  # AIC and BIC
+  aic_value <- AIC(main_model)-AIC(model)
+  bic_value <- BIC(main_model)-BIC(model)
+  # PRESS
+ press=PRESS(main_model)-PRESS(model)
+  # R^2 and Adjusted R^2
+  r_squared <- summary(main_model)$r.squared-summary(model)$r.squared
+  adj_r_squared <- summary(main_model)$adj.r.squared-summary(model)$adj.r.squared
+   MSEf = sum(residuals(main_model)^2)/main_model$df.residual
+  sigma_squared <-  MSEf
+  p <- length(coef(model))
+  cp <-( (sum(residuals(model)^2) )/ sigma_squared ) +  2 * p - (nrow(new.data.cv.in) )
+
+  return(c(DELTA_AIC = aic_value, DELTA_BIC = bic_value, DELTA_PRESS = press, DELTA_R_squared = r_squared, DELTA_Adj_R_squared = adj_r_squared,Mallows_cp=cp))
+}
+Final_Model <- Final_Interaction_Model
+```
+
+```{r,echo=FALSE}
+calculate_model_metrics(Final_Interaction_Model,fit.reduce)
+```
+
+From these results we can see that our AIC,BIC went down when comparing
+Final Interaction Model metrics - Final Main Effect Model metrics,
+$R^2, R^2_{adjusted}$ went up, which means our interaction model is a
+better model out of the two and is our choice for the final model.
+
+**Interaction Model is our Final Model**
+
+**Before doing a full diagnostics on the model, let's only check the
+Homoscedasticity of observed errors assumption from the GAUSS-MARKOV
+Theorem using a** **Breusch-Pagan test for the same**
+
+```{r,echo=FALSE}
+bp <- bptest(Final_Model,studentize = "F")
+test_statistic <- bp$statistic
+p_value <- bp$p.value
+df <- bp$parameter
+
+# Create a data frame for the table
+bp_table <- data.frame(
+  Attribute = c("Test statistic", "p-value", "Degrees of freedom"),
+  Value = c(round(test_statistic,3), round(p_value,3), df)
+)
+
+# Print the table
+kable(bp_table,caption="Breusch-Pagan Test Results(rounded to 3 d.p.)",format="markdown")
+
+```
+
+## Prelim Diagnostics
+
+The p-value is close to zero and we can clearly see that the
+Homoscedasticity of error variance condition is violated.
+
+Let's check the QQ Plot of our residual quantiles with the quantiles of
+the normal distribution for checking the normality of the residuals.
+
+```{r,echo=FALSE,fig.width=4, fig.height=4}
+qqnorm(residuals(Final_Interaction_Model))
+```
+
+Our quantiles for the residuals are not the same as the quantiles of the
+normal distribution, hence normality of residuals/observed errors is
+violated.
+
+## Remidial Transformations
+
+Let's do a box-cox transformation and also apply weighted least
+squares,subsequently to see if we can rectify the violation of the
+normality of residuals and the presence of the heteroscedasticity for
+the residuals.
+
+### Box-Cox Transformation
+
+```{r,echo=FALSE,fig.width=2, fig.height=2}
+boxcox_result <- boxcox(Final_Model)
+optimal_lambda <- boxcox_result$x[which.max(boxcox_result$y)]
+cat("Optimal value of Lambda: ",optimal_lambda)
+```
+
+From here the optimal $\lambda$ is -0.1818182, let's apply the box cox
+transformation
+
+$Y^*= \frac{Y^{\lambda}-1}{\lambda}, \text{; if Y is not 0}$ according
+to the textbook
+
+```{r,echo = FALSE}
+new_data_BCT <- new.data.cv.in
+new_data_BCT$transformed_shares <- (new_data_BCT$shares^(-0.1818182) - 1) / (-0.1818182)
+new_data_BCT$log_shares <- ( log(new_data_BCT$shares))
+lm1 <- lm(transformed_shares~data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + average_token_length + 
+    global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length,data=new_data_BCT)
+lm2 <- lm(log_shares~data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + average_token_length + 
+    global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length,data=new_data_BCT)
+
+
+```
+
+```{r,echo=FALSE}
+sum_bct <- summary(lm1)
+
+Metrics <- c("R_Squared", "Adj_R_Squared", "AIC", "BIC", "F_Statistic", "P_Value","Sigma hat")
+Values <- c(
+  round(sum_bct$r.squared, 3), 
+  round(sum_bct$adj.r.squared, 3), 
+  round(BIC(lm1), 1),  # Calculate AIC
+  round(AIC(lm1), 1),  # Calculate BIC 
+  round(sum_bct$fstatistic[1], 3),
+  format(pf(sum_bct$fstatistic[1], sum_bct$fstatistic[2], sum_bct$fstatistic[3], lower.tail = FALSE), digits = 3),
+  round(sum_bct$sigma,3)
+)
+
+# Create a data frame for the table
+model_summary_table1 <- data.frame(Metrics, Values)
+
+# Print the table
+kable(model_summary_table1, format = "markdown",caption="Model Summary for Final Model with Box-Cox Transformation(rounded to 3 d.p.)")
+
+```
+
+Our Residual Standard Error and MSE have gone down by a lot and we have
+significantly increase our $R^2_{adjusted}$
+
+```{r,echo=FALSE}
+Final_Model <- lm1
+```
+
+### Weighted Least Squares Transformation
+
+Using the method from Lecture 22 for case 3 where we use 1/var.s as the
+weights.(View RMD file for the source code in this section)
+
+```{r,echo=FALSE}
+#Using the Approach from Lec 22 on Final Model
+new_data_BCT$resid = rstandard(Final_Model)
+new_data_BCT$fitted = fitted(Final_Model)
+new_data_BCT$s.hat = abs(new_data_BCT$resid)
+wls_process_1 = lm(s.hat ~ fitted, data =new_data_BCT)
+new_data_BCT$var.s = (predict(wls_process_1)) ^2
+wls_model = lm (transformed_shares~data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + average_token_length + 
+    global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend + self_reference_avg_sharess:avg_negative_polarity:average_token_length, 
+    weights = 1 / var.s,
+    data = new_data_BCT)
+
+
+```
+
+Final Model:
+
+```{r,echo=FALSE}
+#Final_Model
+Final_Model <- wls_model
+summary_fit <- summary(Final_Model)
+coefficients <- summary_fit$coefficients
+
+# Find coefficients where p-value > 0.05
+selected_coefficients <- coefficients[coefficients[, "Pr(>|t|)"] > 0.05, ]
+
+# Display names, estimates, and p-values
+selected_coefficients_info <- data.frame(
+  Estimate = selected_coefficients[, "Estimate"],
+  PValue = selected_coefficients[, "Pr(>|t|)"]
+)
+
+kable(selected_coefficients_info, caption = "Coefficients with p-value > 0.05 for Final Model")
+
+```
+
+From the table above we can drop
+**self_reference_avg_sharess:avg_negative_polarity:average_token_length**
+from our model using the results of the t-tests.
+
+After dropping the 3-way interaction term, let's use a full model
+reduced model F Test to see which parameters can we drop with the table
+above us as our guide.
+
+```{r,echo=FALSE}
+# ANOVA FOR DROPPING SELF REFERENCE AVG SHARES and 
+test_lm1 <- lm(transformed_shares~data_channel + self_reference_avg_sharess + kw_avg_avg + 
+    num_hrefs + avg_negative_polarity + is_weekend + average_token_length + 
+    global_subjectivity + self_reference_avg_sharess:average_token_length + 
+    self_reference_avg_sharess:avg_negative_polarity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend , 
+    data = new_data_BCT, weights = 1/var.s)
+
+test_lm <- lm(formula = transformed_shares ~ data_channel 
+              + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + #avg_negative_polarity + 
+      is_weekend + 
+    average_token_length + global_subjectivity 
+    + # self_reference_avg_sharess:average_token_length #+ 
+    #self_reference_avg_sharess:avg_negative_polarity + 
+      + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + 
+      #is_weekend:global_subjectivity + 
+    self_reference_avg_sharess:kw_avg_avg + 
+      #avg_negative_polarity:average_token_length + 
+    self_reference_avg_sharess:is_weekend #+ 
+    ,data = new_data_BCT, weights = 1/var.s)
+anova_3 <- anova(test_lm, test_lm1)
+
+kable(anova_3,caption="Anova Results from Full Model Reduced Model F Test")
+
+
+Final_Model <- test_lm
+```
+
+With a p-value of 0.3122519 from the Full Model-Reduced Model F-Test ,
+we can drop the following terms
+self_reference_avg_sharess:average_token_length
+self_reference_avg_sharess:avg_negative_polarity
+avg_negative_polarity:average_token_length
+is_weekend:global_subjectivity
+
+Which results in the final model as
+
+# FINAL MODEL: EQUATION AND INTERPRETATION
+
+```{=tex}
+\begin{footnotesize}
+\begin{align*}
+\widehat{{\frac{shares^\lambda -1 }{\lambda}}} = & \hat\beta_0 + \hat\beta_1 \cdot \mathrm{d.c.\_ent} + \hat\beta_2 \cdot \mathrm{d.c.\_life} + \hat\beta_3 \cdot \mathrm{d.c.\_socmed} + \hat\beta_4 \cdot \mathrm{d.c.\_tech} \\
+& + \hat\beta_5 \cdot \mathrm{d.c.\_world} + \hat\beta_6 \cdot \mathrm{d.c.\_not\_spec} + \hat\beta_7 \cdot \mathrm{sr\_as} + \hat\beta_8 \cdot \mathrm{kw\_aa} + \hat\beta_9 \cdot \mathrm{num\_hrefs} \\
+& + \hat\beta_{10} \cdot \mathrm{is\_weekend} + \hat\beta_{11} \cdot \mathrm{avg\_tok\_len} + \hat\beta_{12} \cdot \mathrm{glob\_subj} \\
+& + \hat\beta_{13} \cdot \mathrm{d.c.\_ent:sr\_as} + \hat\beta_{14} \cdot \mathrm{d.c.\_life:sr\_as} + \hat\beta_{15} \cdot \mathrm{d.c.\_socmed:sr\_as} \\
+& + \hat\beta_{16} \cdot \mathrm{d.c.\_tech:sr\_as} + \hat\beta_{17} \cdot \mathrm{d.c.\_world:sr\_as} + \hat\beta_{18} \cdot \mathrm{d.c.\_not\_spec:sr\_as} \\
+& + \hat\beta_{19} \cdot \mathrm{d.c.\_ent:kw\_aa} + \hat\beta_{20} \cdot \mathrm{d.c.\_life:kw\_aa} + \hat\beta_{21} \cdot \mathrm{d.c.\_socmed:kw\_aa} \\
+& + \hat\beta_{22} \cdot \mathrm{d.c.\_tech:kw\_aa} + \hat\beta_{23} \cdot \mathrm{d.c.\_world:kw\_aa} + \hat\beta_{24} \cdot \mathrm{d.c.\_not\_spec:kw\_aa} \\
+& + \hat\beta_{25} \cdot \mathrm{sr\_as:kw\_aa} + \hat\beta_{26} \cdot \mathrm{sr\_as:is\_weekend}
+\end{align*}
+\end{footnotesize}
+```
+```{=tex}
+\begin{table}[h]
+\centering
+\begin{footnotesize}
+\begin{tabular}{|c|c|c|c|c|c|}
+\hline
+Coefficient & Variable & Value & Coefficient & Variable & Value \\
+\hline
+\(\hat\beta_0\) & Intercept & 3.9247237704505 & \(\hat\beta_1\) & \(\mathrm{d.c.\_ent}\) & -0.0215401553683 \\
+\(\hat\beta_2\) & \(\mathrm{d.c.\_life}\) & 0.1181528563169 & \(\hat\beta_3\) & \(\mathrm{d.c.\_socmed}\) & 0.1678115350934 \\
+\(\hat\beta_4\) & \(\mathrm{d.c.\_tech}\) & 0.0599418855394 & \(\hat\beta_5\) & \(\mathrm{d.c.\_world}\) & -0.0108433698279 \\
+\(\hat\beta_6\) & \(\mathrm{d.c.\_not\_spec}\) & 0.0925455391235 & \(\hat\beta_7\) & \(\mathrm{sr\_as}\) & 0.0000011416165 \\
+\(\hat\beta_8\) & \(\mathrm{kw\_aa}\) & 0.0000493694856 & \(\hat\beta_9\) & \(\mathrm{num\_hrefs}\) & 0.0014029322548 \\
+\(\hat\beta_{10}\) & \(\mathrm{is\_weekend}\) & 0.0817229941257 & \(\hat\beta_{11}\) & \(\mathrm{avg\_tok\_len}\) & -0.0213240880211 \\
+\(\hat\beta_{12}\) & \(\mathrm{glob\_subj}\) & 0.1315670052225 & \(\hat\beta_{13}\) & \(\mathrm{d.c.\_ent:sr\_as}\) & 0.0000018100158 \\
+\(\hat\beta_{14}\) & \(\mathrm{d.c.\_life:sr\_as}\) & 0.0000008879054 & \(\hat\beta_{15}\) & \(\mathrm{d.c.\_socmed:sr\_as}\) & 0.0000012351376 \\
+\(\hat\beta_{16}\) & \(\mathrm{d.c.\_tech:sr\_as}\) & -0.0000002254488 & \(\hat\beta_{17}\) & \(\mathrm{d.c.\_world:sr\_as}\) & 0.0000004401177 \\
+\(\hat\beta_{18}\) & \(\mathrm{d.c.\_not\_spec:sr\_as}\) & 0.0000004303885 & \(\hat\beta_{19}\) & \(\mathrm{d.c.\_ent:kw\_aa}\) & -0.0000111991485 \\
+\(\hat\beta_{20}\) & \(\mathrm{d.c.\_life:kw\_aa}\) & -0.0000340864494 & \(\hat\beta_{21}\) & \(\mathrm{d.c.\_socmed:kw\_aa}\) & -0.0000333004224 \\
+\(\hat\beta_{22}\) & \(\mathrm{d.c.\_tech:kw\_aa}\) & -0.0000022513886 & \(\hat\beta_{23}\) & \(\mathrm{d.c.\_world:kw\_aa}\) & -0.0000097514656 \\
+\(\hat\beta_{24}\) & \(\mathrm{d.c.\_not\_spec:kw\_aa}\) & -0.0000225867695 & \(\hat\beta_{25}\) & \(\mathrm{sr\_as:kw\_aa}\) & -0.0000000001121 \\
+\(\hat\beta_{26}\) & \(\mathrm{sr\_as:is\_weekend}\) & -0.0000009101439 & & & \\
+\hline
+\end{tabular}
+\end{footnotesize}
+\caption{Regression Coefficients}
+\end{table}
+```
+**Abbreviation Dictionary:** D.C.: Data Channel,S.R.A.S.: Self Reference
+Avg Shares , K.A.A.: Keyword Avg Avg, N.H.: Num Hrefs ,I.W.: Is Weekend,
+A.T.L.: Average Token Length, G.S.: Global Subjectivity
+
+## Interpretation of our model's coefficients and their significance
+
+```{r,echo=FALSE,warning=FALSE}
+
+summary_fit <- summary(Final_Model)
+coefficients <- summary_fit$coefficients
+
+# Find coefficients where p-value > 0.05
+selected_coefficients <- coefficients[coefficients[, "Pr(>|t|)"] > 0.05, ]
+
+# Display names, estimates, and p-values
+selected_coefficients_info <- data.frame(
+  Estimate = selected_coefficients[, "Estimate"],
+  PValue = selected_coefficients[, "Pr(>|t|)"]
+)
+kable(selected_coefficients_info, caption = "Coefficients with p-value > 0.05 for Overall Final Model")
+```
+
+$\hat\beta_0$ The transformed value of shares, when it is a weekend
+day(reference level or zero value for is_weekend),the channel is
+business(reference category for data_channel), while all the other
+predictors are 0. $\hat\beta_1 \ to \ \hat\beta_6$: The difference in
+transformed value of shares, when comparing data channel for the
+respective coefficients channel name with the business data channel,
+holding all the other predictors constant. This value has now real world meaning as there will be no scenario where some of our predictors could actually be zero in an article.
+
+$\hat\beta_{10}$: The difference in transformed value of shares for when a weekday is compared with a weekend day holding all other predictors constant. From the table above us we can see there is no statistically significant pairwise difference between business and entertainment & world and business data channels.
+
+$\hat\beta_7 \ to \ \hat\beta_9 \ and\ \hat\beta_9 \ to \hat\beta_{12}$
+: The change in transformed value of shares for one unit change in the
+respective variable of the coefficient, holding all other predictors
+constant.
+
+$\hat\beta_{13} \ to \ \hat\beta_{18}$:These terms represent the interaction between different data channels (like entertainment, life, etc.) and the self-reference average shares (S.R.A.S.). Each coefficient reflects the difference in the change of transformed shares per one unit change in S.R.A.S., compared to the business channel which serves as the reference level holding other predictors constant. A negative values means the response goes down and vice-versa. From the table above, the interaction effect due to channels lifestyle,tech, not specified and world are not statistically significant. 
+
+$\hat\beta_{19} \ to \ \hat\beta_{24}$: These terms represent the interaction between different data channels (like entertainment, life, etc.) and Key-Words-Average - kw_avg_avg- . Each coefficient reflects the difference in the change of transformed shares per one unit change in K.A.A (while holding other predictors constant), compared to the business channel which serves as the reference level . A negative values means the response goes down and vice-versa. The interaction effect due to the not specified and tech channels are not statistically significant according to the table above.
+
+$\hat\beta_{25}$: The combined effect of Keyword Avg Avg and Self Reference
+Avg Shares on the transformed shares. It represents how the effect of one unit increase in 'kw_avg_avg' on the dependent variable 'transformed_shares' changes for each unit increase in 'self_reference_avg_sharess' while holding all else constant. A negative Beta26 indicates that as 'self_reference_avg_sharess' increases, the positive effect of 'kw_avg_avg' on 'transformed_shares' decreases." 
+
+$\hat\beta_{26}$:When comparing an article published on a weekend vs weekday, we have a -0.0000009101439 difference in the transformed shares for each one unit change in 'self_reference_avg_sharess' while holding all the other predictors constant.
+
+## Model Metrics and interpretation
+
+```{r,echo=FALSE,results='hide',message=FALSE}
+# Assuming 'model' is your linear model object
+# model <- lm(formula, data = your_data)
+
+# Get the summary and anova of the model
+model_summary <- summary(Final_Model)
+model_anova <- anova(Final_Model)
+
+# Calculate SSE (Sum of Squared Errors)
+mse <- model_summary$sigma^2
+
+# Calculate PRESS (Prediction Sum of Squares)
+press <- PRESS(Final_Model)
+
+# Extract R-squared and Adjusted R-squared
+r_squared <- model_summary$r.squared
+adj_r_squared <- model_summary$adj.r.squared
+
+# Extract AIC and BIC
+aic <- AIC(Final_Model)
+bic <- BIC(Final_Model)
+
+# Extract F-statistic and its p-value
+f_statistic <- model_summary$fstatistic[1]
+f_value <- model_summary$fstatistic[1]  # This is the F-statistic value
+df1 <- model_summary$fstatistic[2]      # This is the numerator degrees of freedom (model df)
+df2 <- model_summary$fstatistic[3]      # This is the denominator degrees of freedom (residual df)
+
+# Now use these to calculate the p-value for the F-statistic
+p_value <- pf(f_value, df1, df2, lower.tail = FALSE)
+
+# Create a data frame with all metrics
+metrics_df <- data.frame(
+  MSE = round(mse,3),
+  R_Squared = round(r_squared,3),
+  Adj_R_Squared = round(adj_r_squared,3),
+  AIC = round(aic,3),
+  BIC = round(bic,3),
+  PRESS = round(press,3),
+  F_Statistic = (f_statistic),
+  F_pvalue = round(p_value,3)
+)
+
+
+#print(metrics_df)
+
+```
+```{r,echo=FALSE,warning=FALSE}
+kable(metrics_df,caption="Final Model Metrics (rounded to 3 d.p.)",format = "markdown")
+```
+Adjusted $R^2$: From this we can see that approximately 11.5% of the variation in our response variable is explained by the regression model after adjusting for our parameters.Our model has a low explanatory power.
+
+F-Test: The extremely low p-value of the global F-test for our linear model suggests a statistically significant association between the predictors and the response variable, indicating that the model as a whole is likely to be meaningful.
+
+MSE: With a value of 0.083, it indicates the average squared difference between the observed actual outcomes and the outcomes predicted by the model is very low.
+
+## Model Validation
+Using the 40% of our intitial data set for testing the preidciton capabilities of the model.
+
+```{r,echo=FALSE,warning=FALSE}
+#new.data.cv.out = read.csv("data.val.csv")# Reading the validation data set in
+new.data.cv.out$is_weekend = factor(new.data.cv.out$is_weekend)
+new.data.cv.out$transformed_shares <- (new.data.cv.out$shares^(-0.1818182) - 1) / (-0.1818182)
+```
+
+```{r,echo=FALSE,warning=FALSE}
+
+predict_cv_40 <- predict(Final_Model,new.data.cv.out)
+nstar <- length(new.data.cv.out$shares)
+MSPE <- sum(new.data.cv.out$transformed_shares-predict_cv_40)^2/nstar
+cat("MSPE: ",MSPE , "  & MSE: ",summary(Final_Model)$sigma^2)
+
+```
+Our model's lower Mean Squared Prediction Error (MSPE) compared to its Mean Squared Error (MSE) suggests better performance on unseen data, indicating potential for good generalizability and lack of overfitting. To confirm this, we should employ k-fold cross-validation, a robust validation technique. In this process, the data is divided into 'k' parts; the model is trained on 'k-1' folds and tested on the remaining fold, iteratively. This will provide a more comprehensive assessment of the model's generalization ability across various subsets of the data.
+
+## K-Folds Cross Validation
+
+We will do a K-Folds Cross Validation Technique with 100 folds,
+typically used in machine learning. You take a model, split the dataset
+into K sections, train it on 1 section and test on K-1 sections and
+repeat it for all the folds to get an average MSE/AIC etc.
+
+```{r,echo=FALSE,warning=FALSE,results='hide'}
+
+set.seed(5)
+data <- new_data
+data$transformed_shares <- (data$shares^(-0.1818182) - 1) / (-0.1818182)
+formulaFinal = transformed_shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + num_hrefs + is_weekend + average_token_length + global_subjectivity  + data_channel:self_reference_avg_sharess +  data_channel:kw_avg_avg + self_reference_avg_sharess:kw_avg_avg + 
+     
+    self_reference_avg_sharess:is_weekend 
+
+# Define a function to calculate MSPE, including the recalculation of var.s
+get_weight <- function(data)
+{
+  model= lm(formula = transformed_shares ~ data_channel + self_reference_avg_sharess + kw_avg_avg + num_hrefs + is_weekend + average_token_length + global_subjectivity  + data_channel:self_reference_avg_sharess +  data_channel:kw_avg_avg + self_reference_avg_sharess:kw_avg_avg + 
+     
+    self_reference_avg_sharess:is_weekend 
+    ,data =data)
+  data$resid = rstandard(model)
+  data$fitted = fitted(model)
+  data$s.hat = abs(data$resid)
+  wls_process_1 = lm(s.hat ~ fitted, data = data)
+  data$var.s = (predict(wls_process_1)) ^2
+  var.s = data$var.s
+  weight = 1 / var.s
+  return(weight)
+}
+
+```
+
+```{r,echo=FALSE,warning=FALSE}
+set.seed(5)
+folds <- createFolds(data$transformed_shares, k = 100, list = TRUE, returnTrain = FALSE)
+
+MSPE_Vec <- c()
+R2_adj_Vec <- c()
+R2_adj_test_Vec <- c()
+cv_results <- lapply(seq_along(folds), function(i) {
+  train_indices <- unlist(folds[-i])
+
+  test_indices <- folds[[i]]
+
+  train_set <- data[train_indices, ]
+
+  test_set <- data[test_indices, ]
+  
+
+  # Calculate weights for the training set
+
+
+  # Fit the linear model on the training set
+  lm_model <- lm(transformed_shares ~ data_channel + self_reference_avg_sharess + 
+    kw_avg_avg + num_hrefs + is_weekend + average_token_length + 
+    global_subjectivity + data_channel:self_reference_avg_sharess + 
+    data_channel:kw_avg_avg + self_reference_avg_sharess:kw_avg_avg + 
+    self_reference_avg_sharess:is_weekend, data = train_set, weights = get_weight(train_set))
+
+  # Predict on the test set
+  predictions <- predict(lm_model, newdata = test_set)
+  nstar <- length(test_set$shares)
+  MSPE <- sum((test_set$transformed_shares-  predictions)^2)/nstar
+  MSPE_Vec <- c(MSPE_Vec,MSPE)
+
+  
+  return((MSPE_Vec))
+})
+
+average_rmse <- mean(unlist(cv_results))
+
+cat("AVG K FOLDS MSPE: ",average_rmse)
+
+  
+```
+For a 100 fold CV, we can see our MSPE Average is much lower than our MSE, which confirms what we had mentioned about generalizability of our model.
+
+
+
+# Diagnostics
+
+## Diagnostic Plots and Outliers
+
+```{r,echo=FALSE,fig.width=5, fig.height=4,warning=FALSE}
+res <- residuals(Final_Model)
+fit_vals <- fitted(Final_Model)
+plot(fit_vals, res, xlab = "Fitted Values", ylab = "Residuals")
+abline(h = 0, col = "red")
+```
+
+### Residual vs Fitted Plot : 
+
+In this plot, the residuals do not appear to fan out or form a pattern, which is good for homoscedasticity. However, there's a slight curve to the residual points, which may suggest a non-linear relationship between the predictors and the response variable.
+
+```{r,echo=FALSE,fig.width=5, fig.height=4,warning=FALSE}
+# Assuming Final_Model is your linear model object
+# Create Residuals vs Leverage plot with Cook's distance
+plot(Final_Model, which = 5)
+
+# Find influential points using a common threshold for Cook's distance
+cooks_dist <- cooks.distance(Final_Model)
+influential_points <- which(cooks_dist > (4/length(cooks_dist)))
+
+# Add text labels for influential points
+text(influential_points, cooks_dist[influential_points], labels = names(influential_points), cex = 0.7, pos = 4)
+```
+
+### Residuals vs. Leverage Plot:
+
+The plot shows Cook's distance as dashed curves, which measures the influence of each observation. 
+In this plot, there are a few points labeled that are well outside the Cook's distance curves, especially the one labeled 106540, indicating they are potentially influential.
+```{r,echo=FALSE,fig.width=5, fig.height=4,warning=FALSE}
+std_res <- rstandard(Final_Model)
+qqnorm(std_res)
+qqline(std_res, col = "red")
+```
+
+
+### QQ Normal Plot
+
+The curvature in this Q-Q plot suggests that the residuals have heavier tails than expected under normality. This means that there are more extreme values (both low and high) than what would be expected if the residuals were perfectly normally distributed. This could affect confidence intervals and hypothesis tests, as these are typically based on the assumption of normally distributed errors.
+```{r,echo=FALSE,fig.width=5, fig.height=4,warning=FALSE}
+std_res <- rstandard(Final_Model)
+plot(fit_vals, std_res^0.5, xlab = "Fitted Values", ylab = "Square Root of Standardized Residuals")
+abline(h = 0, col = "red")
+```
+
+### Scale-Location Plot 
+
+The red line should that should ideally be horizontal and flat across the range of fitted values if homoscedasticity holds. In our plot, the loess fit line shows a slight upward trend, suggesting that the variance of the residuals may increase as the fitted values increase, which indicates potential heteroscedasticity. The points also seem to fan out slightly for higher fitted values.
+
+ 
+
+Given the lack of ownership and detailed background knowledge of the dataset, coupled with the limited scope of this study, we will refrain from removing influential points or outliers. Such a procedure, without a thorough understanding of the underlying data-generating process, risks the exclusion of a significant portion of the dataset. This could potentially lead to overfitting and adversely affect the model's generalizability to the broader population. Therefore, to maintain the integrity and applicability of our findings, all data points will be retained for analysis."zability.
+
+
+
+## OUTLIERS AND INFLUENTIAL POINTS FINDING THEM USING R FUNCTIONS
+
+We are using the R functions to retrieve a list  of points which fail the threshold of our measures like DFFBETAS, COOK's Distance,DFFITS and Leverage.
+
+```{r,echo=FALSE,warning=FALSE}
+# Assuming lm_test is your linear model
+influence_data <- influence.measures(Final_Model)
+
+# Extracting the influence measures matrix
+inf_matrix <- influence_data$infmat
+
+# Set thresholds for identifying influential points
+# These thresholds can be adjusted based on your specific criteria
+threshold_leverage = 2 * mean(inf_matrix[, "hat"])  # Twice the average hat value
+threshold_studentized_residual = 2  # Absolute value greater than 2
+threshold_cooks_distance = 4 / nrow(inf_matrix)  # Common guideline
+
+# Assuming lm_test is your linear model
+influence_data <- influence.measures(Final_Model)
+
+# Extracting the influence measures
+inf_matrix <- influence_data$infmat
+
+# Set thresholds for identifying influential points
+n <- nrow(inf_matrix)
+p <- length(coef(Final_Model))  # Number of predictors including the intercept
+threshold_leverage = 2 * mean(inf_matrix[, "hat"])  # Twice the average hat value
+threshold_cooks_distance = 4 / n  # Common guideline
+threshold_dffits = 2 * sqrt((p + 1) / n)
+
+# Identifying influential points
+influential_points <- which(
+  inf_matrix[, "hat"] > threshold_leverage |
+  inf_matrix[, "cook.d"] > threshold_cooks_distance |
+  abs(inf_matrix[, "dffit"]) > threshold_dffits
+)
+
+# Display the row numbers of the influential points
+cat("Total number of inflential points using thresholds for leverage, cooks distance and dffits and hat",length(influential_points))
+
+```
+This is a huge chunk of our data set deleting these points might improve our metrics but
+we cannot be sure about the reliability.
+
+# CONCLUSION
+
+**Summary of Findings:**
+
+Our comprehensive statistical analysis has identified critical factors influencing the shareability of Mashable articles. The model highlights the intricate relationships between variables such as data channel types and their interactions with Self-Reference Average Shares (S.R.A.S.) and Keyword Average (K.A.A.), which differently affect share counts. It underscores the significance of the data channel type and its interplay with S.R.A.S., while noting that other interactions, like those with keywords, are less influential. The analysis also shows variations in share counts based on publication day and data channel, providing valuable insights for content optimization strategies.
+
+**Limitations of Our Study:**
+
+
+Variable Selection: Important factors like social media algorithms and real-time events were not included, possibly leading to unaccounted influences on shareability.
+-Model Complexity: While our model is comprehensive, its complexity might mask simpler relationships.
+Data Quality and Accuracy: Assumptions about data accuracy and completeness might have impacted our findings.
+-Need for Alternative Modeling Approaches: The low R² value (0.111), minimal mean squared error, unequal variances in observed errors, violation of normality, and presence of influential points and outliers in our dataset suggest limitations in our linear regression approach. This indicates the necessity for alternative, more robust modeling techniques.
+
+**Future Extensions:**
+
+To address these challenges, future studies could leverage advanced machine learning algorithms like Support Vector Machines (SVMs) and Random Forests. These methods, renowned for their ability to handle complex, high-dimensional data, and large datasets with numerous input variables, respectively, could offer more sophisticated insights into the multifaceted predictors of article shareability. By employing these techniques, we anticipate a more robust and nuanced understanding of the dynamics shaping online content virality.
+
+
